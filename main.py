@@ -31,7 +31,6 @@ from services.gemini_service import generate_aec_response
 from services.storage_service import upload_bytes_to_storage
 from services.telegram_service import (
     download_telegram_file,
-    send_telegram_audio,
     send_telegram_text,
 )
 from services.user_service import (
@@ -42,7 +41,7 @@ from services.user_service import (
 from services.whatsapp_service import (
     download_media_bytes,
     mark_message_as_read,
-    send_audio_message,
+    # send_audio_message,
     send_text_message,
 )
 
