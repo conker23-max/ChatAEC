@@ -5,7 +5,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 
-async def get_or_create_utilisateur(
+async def get_or_create_user(
     platform_id: str,
     session_db: AsyncSession,
     prenom_defaut: str = "Citoyen",
