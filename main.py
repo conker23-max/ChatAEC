@@ -235,11 +235,7 @@ app = FastAPI(
     openapi_url=None,
     lifespan=lifespan,
 )
-os.makedirs("static", exist_ok=True)
-os.makedirs("templates", exist_ok=True)
 
-app.mount("/static", StaticFiles(directory="static"), name="static")
-templates = Jinja2Templates(directory="templates")
 PROCESSED_MESSAGES = TTLCache(maxsize=2000, ttl=300)
 ACTIVE_USERS = set()
 
@@ -570,6 +566,6 @@ async def telegram_webhook(
 # ==========================================================
 # SITE INTERNET
 # ==========================================================
-@app.get("/", response_class=HTMLResponse)
-async def landing_page(request: Request):
-    return templates.TemplateResponse(request=request, name="index.html")
+@app.get("/")
+async def landing_page():
+    return {"status": "ChatAEC en ligne"}
