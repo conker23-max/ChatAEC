@@ -529,10 +529,6 @@ async def telegram_webhook(
         media_type=media_type,
         is_group=is_group,
     )
-    bot_reply = "Réponse test de ChatAEC."
-    reply_as_audio = False
-    total_p_tokens = 0
-    total_c_tokens = 0
 
     # Historique DB
     session_db.add(
