@@ -235,8 +235,8 @@ app = FastAPI(
     openapi_url=None,
     lifespan=lifespan,
 )
-app.mount("/static", StaticFiles(directory="static"), name="static")
-templates = Jinja2Templates(directory="templates")
+# app.mount("/static", StaticFiles(directory="static"), name="static")
+# templates = Jinja2Templates(directory="templates")
 PROCESSED_MESSAGES = TTLCache(maxsize=2000, ttl=300)
 ACTIVE_USERS = set()
 
