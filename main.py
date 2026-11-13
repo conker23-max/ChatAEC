@@ -307,10 +307,6 @@ async def process_whatsapp_message(msg: dict):
                 session_db=session,
                 media_type=media_type,
             )
-            bot_reply = "Réponse test de ChatAEC."
-            reply_as_audio = False
-            total_p_tokens = 0
-            total_c_tokens = 0
 
             session.add(
                 MessageLog(
