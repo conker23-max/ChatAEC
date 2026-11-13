@@ -31,7 +31,6 @@ from services.gemini_service import generate_aec_response
 from services.storage_service import upload_bytes_to_storage
 from services.telegram_service import (
     download_telegram_file,
-    generer_audio_discord,
     send_telegram_audio,
     send_telegram_text,
 )
@@ -53,7 +52,6 @@ from services.whatsapp_service import (
 intents = discord.Intents.default()
 intents.message_content = True
 discord_bot = commands.Bot(command_prefix="!", intents=intents)
-
 
 @discord_bot.event
 async def on_ready():
