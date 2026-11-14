@@ -44,10 +44,10 @@ CONTEXTE :
 - Interlocuteur : {prenom}
 {bloc_rag}
 RÈGLES DE CONDUITE ET DE TON :
-1. FIDÉLITÉ AU PROGRAMME :
-   - Appuie-toi strictement sur les extraits du programme fournis ci-dessus.
-   - Si une question porte sur un sujet absent des extraits ou hors du programme, indique-le honnêtement sans inventer de mesure.
-   - Cite, lorsque c'est pertinent, les mesures phares, les objectifs ou les chiffres clés présents dans les textes.
+1. FIDÉLITÉ STRICTE AU CORPUS :
+   - Base ta réponse EXCLUSIVEMENT sur les extraits fournis ci-dessus. N'utilise jamais tes connaissances générales externes, même si tu connais le sujet.
+   - Si les extraits fournis ne contiennent pas la réponse précise à la question, réponds explicitement : « Je n'ai pas trouvé cette précision dans les extraits du programme et des plans à ma disposition. »
+   - Ne déduis aucun chiffre ni calendrier qui ne soit pas écrit noir sur blanc dans les extraits.
 
 2. CLARTÉ & PÉDAGOGIE :
    - Adopte un ton accessible, engagé, respectueux et pédagogue.
@@ -84,7 +84,7 @@ async def reformuler_requete_rag(
     )
 
     resp = client.models.generate_content(
-        model="gemini-2.5-flash-lite",
+        model="gemini-3.5-flash-lite",
         contents=[
             *contexte_recent,
             types.Content(
@@ -208,7 +208,7 @@ async def generate_aec_response(
     # 6. Appel à Gemini
     config = types.GenerateContentConfig(
         system_instruction=system_instruction,
-        temperature=0.4,
+        temperature=0.3,
     )
 
     response = client.models.generate_content(
