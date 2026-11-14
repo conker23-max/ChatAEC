@@ -1,4 +1,6 @@
 import os
+import re
+import html
 import httpx
 
 # --- CHARGEMENT DU TOKEN & USERNAME ---
@@ -13,6 +15,18 @@ else:
     BASE_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
     FILE_BASE_URL = f"https://api.telegram.org/file/bot{BOT_TOKEN}"
 
+def formater_pour_telegram(texte: str) -> str:
+    """Convertit le gras **texte** en balises HTML <b>texte</b> en échappant le reste."""
+    # 1. On échappe d'abord les caractères spéciaux HTML (<, >, &)
+    texte_securise = html.escape(texte)
+    # 2. On transforme **gras** en <b>gras</b>
+    texte_securise = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", texte_securise)
+    # 3. On transforme les italiques
+    texte_securise = re.sub(r"(?<!_)_(?!_)(.+?)(?<!_)_(?!_)", r"<i>\1</i>", texte_securise)
+    # 4. Sécurité : si Gemini met quand même un *simple*, on le convertit aussi en gras
+    texte_securise = re.sub(r"(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)", r"<b>\1</b>", texte_securise)
+    return texte_securise
+
 
 async def send_telegram_text(
     chat_id: int | str,
@@ -23,7 +37,7 @@ async def send_telegram_text(
     url = f"{BASE_URL}/sendMessage"
     payload = {
         "chat_id": chat_id,
-        "text": text,
+        "text": formater_pour_telegram(text),
     }
     if show_mp_button:
         payload["reply_markup"] = {

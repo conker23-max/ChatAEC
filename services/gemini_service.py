@@ -8,7 +8,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import GEMINI_API_KEY
 from models import MessageLog, Utilisateur
-# À décommenter dès que nous aurons construit le service RAG :
 from services.rag_service import rechercher_passages_programme
 
 warnings.filterwarnings("ignore", category=UserWarning, module="google.genai")
@@ -56,20 +55,46 @@ RÈGLES DE CONDUITE ET DE TON :
    - Termine souvent par une ouverture courte pour proposer d'approfondir un point ou un thème connexe.
 
 3. FORMAT MESSAGERIE (TELEGRAM / WHATSAPP) :
-   - Pas de titres Markdown complexes (`#`, `##`).
-   - Utilise le gras (`*mot*`) pour mettre en valeur les notions clés et les mesures principales.
+   - Pas de titres Markdown (`#`, `##`, `###`).
+   - Utilise uniquement le double astérisque (`**mot**`) pour mettre en gras les notions clés et les mesures principales. N'utilise jamais d'astérisque simple (`*mot*`).
+   - Utilise des tirets (`- `) ou des puces (`• `) pour les listes.
    - Reste concis (idéalement moins de 1 200 caractères par réponse pour rester agréable à lire sur mobile).
-
-4. MODALITÉ DE RÉPONSE (OBLIGATOIRE EN DÉBUT DE MESSAGE) :
-   Commence chaque réponse par l'une de ces deux balises :
-   - [AUDIO] : Uniquement si l'utilisateur t'a envoyé un message vocal ou demande explicitement une réponse vocale.
-   - [TEXTE] : Dans tous les autres cas (par défaut).
 """
 
 
 # =====================================================================
 # 2. HISTORIQUE CONVERSATIONNEL (Fenêtre glissante)
 # =====================================================================
+async def reformuler_requete_rag(
+    question_actuelle: str,
+    historique: list[types.Content],
+) -> str:
+    """Si la question est une relance courte ('et le coût ?', 'pourquoi ?'),
+    la rend autonome grâce à l'historique pour que le RAG trouve les bons passages."""
+    if not historique:
+        return question_actuelle
+
+    # On prend les 4 derniers messages pour le contexte immédiat
+    contexte_recent = historique[-4:]
+    prompt_reformulation = (
+        "Réécris la dernière question de l'utilisateur pour qu'elle soit autonome et claire "
+        "pour un moteur de recherche sur le programme politique « L'Avenir en commun », "
+        "en intégrant le sujet de la conversation précédente si nécessaire. "
+        "Réponds UNIQUEMENT par la question reformulée, en une phrase courte."
+    )
+
+    resp = client.models.generate_content(
+        model="gemini-2.5-flash-lite",
+        contents=[
+            *contexte_recent,
+            types.Content(
+                role="user",
+                parts=[types.Part.from_text(text=f"{prompt_reformulation}\n\nQuestion : {question_actuelle}")],
+            ),
+        ],
+    )
+    return (resp.text or question_actuelle).strip()
+
 async def charger_historique_recent(
     id_utilisateur: int,
     session_db: AsyncSession,
@@ -97,7 +122,6 @@ async def charger_historique_recent(
         else dernier_msg.cree_le.replace(tzinfo=timezone.utc)
     )
 
-    # Réinitialisation du contexte après une longue pause
     if (maintenant - date_msg) > timedelta(hours=timeout_heures):
         return []
 
@@ -131,23 +155,33 @@ async def generate_aec_response(
     session_db: AsyncSession,
     media_type: str = "texte",
     is_group: bool = False,
-) -> tuple[str, bool, int, int]:
-    """Génère une réponse conversationnelle appuyée sur le RAG du programme."""
+) -> tuple[str, bool, int, int, str]:  # <-- on ajoute le texte transcrit en 5e valeur de retour
+    """Génère une réponse écrite appuyée sur le RAG du programme."""
 
-    # 1. Recherche RAG dans le programme (si l'entrée est textuelle)
-    extraits_programme = ""
-    if media_type == "texte" and isinstance(user_input, str):
-        # TODO : Brancher ici la recherche vectorielle / hybride sur Supabase
-        extraits_programme = await rechercher_passages_programme(user_input)
-        pass
+    # 1. Si c'est un vocal, on le transcrit d'abord en texte
+    if media_type == "audio" and isinstance(user_input, bytes):
+        transcript_resp = client.models.generate_content(
+            model="gemini-2.5-flash-lite",
+            contents=[
+                types.Part.from_bytes(data=user_input, mime_type="audio/ogg"),
+                "Transcris exactement ce message vocal en français, sans aucun commentaire.",
+            ],
+        )
+        user_input = (transcript_resp.text or "").strip()
+        media_type = "texte"
 
-    # 2. Construction du prompt système
-    system_instruction = generer_system_instruction(
-        utilisateur=utilisateur,
-        extraits_programme=extraits_programme,
-    )
+        if not user_input:
+            return (
+                "Je n'ai pas réussi à entendre ce message vocal. Peux-tu le réenregistrer ou m'écrire ta question ?",
+                False,
+                0,
+                0,
+                "",
+            )
 
-    # 3. Chargement de l'historique (désactivé en groupe pour éviter les mélanges)
+    texte_utilisateur = str(user_input)
+
+    # 2. Chargement de l'historique EN PREMIER (pour éclairer aussi le RAG)
     if is_group:
         contents_to_send = []
     else:
@@ -155,20 +189,26 @@ async def generate_aec_response(
             utilisateur.id_utilisateur, session_db, limite=12
         )
 
-    # 4. Préparation du message utilisateur (Texte, Audio ou Image)
-    if media_type == "audio" and isinstance(user_input, bytes):
-        part = types.Part.from_bytes(data=user_input, mime_type="audio/ogg")
-    elif media_type == "image" and isinstance(user_input, bytes):
-        part = types.Part.from_bytes(data=user_input, mime_type="image/jpeg")
-    else:
-        part = types.Part.from_text(text=str(user_input))
+    # 3. Reformulation contextuelle + Recherche RAG dans le programme
+    extraits_programme = ""
+    if media_type == "texte" and texte_utilisateur:
+        requete_rag = await reformuler_requete_rag(texte_utilisateur, contents_to_send)
+        extraits_programme = await rechercher_passages_programme(requete_rag)
 
+    # 4. Construction du prompt système
+    system_instruction = generer_system_instruction(
+        utilisateur=utilisateur,
+        extraits_programme=extraits_programme,
+    )
+
+    # 5. Préparation du message utilisateur
+    part = types.Part.from_text(text=texte_utilisateur)
     contents_to_send.append(types.Content(role="user", parts=[part]))
 
-    # 5. Appel à Gemini (sans tools complexes, le RAG injecte le contexte directement)
+    # 6. Appel à Gemini
     config = types.GenerateContentConfig(
         system_instruction=system_instruction,
-        temperature=0.4,  # Température modérée pour rester fidèle aux extraits du programme
+        temperature=0.4,
     )
 
     response = client.models.generate_content(
@@ -177,15 +217,12 @@ async def generate_aec_response(
         config=config,
     )
 
-    # 6. Comptabilisation des tokens
-    total_p_tokens = 0
-    total_c_tokens = 0
+    # 7. Comptabilisation des tokens
     usage = getattr(response, "usage_metadata", None)
-    if usage:
-        total_p_tokens = getattr(usage, "prompt_token_count", 0) or 0
-        total_c_tokens = getattr(usage, "candidates_token_count", 0) or 0
+    total_p_tokens = (getattr(usage, "prompt_token_count", 0) or 0) if usage else 0
+    total_c_tokens = (getattr(usage, "candidates_token_count", 0) or 0) if usage else 0
 
-    # 7. Extraction et nettoyage de la réponse
+    # 8. Extraction et nettoyage de la réponse
     clean_text = ""
     if response.candidates and response.candidates[0].content.parts:
         text_parts = [
@@ -196,11 +233,9 @@ async def generate_aec_response(
         clean_text = "".join(text_parts).strip()
 
     clean_text = re.sub(r"\[THOUGHT\].*?\[/THOUGHT\]", "", clean_text, flags=re.DOTALL)
-
-    reply_as_audio = clean_text.startswith("[AUDIO]")
     clean_text = clean_text.replace("[AUDIO]", "").replace("[TEXTE]", "").strip()
 
     if not clean_text:
         clean_text = "Je n'ai pas pu formuler de réponse. Peux-tu reformuler ta question sur le programme ?"
 
-    return clean_text, reply_as_audio, total_p_tokens, total_c_tokens
+    return clean_text, False, total_p_tokens, total_c_tokens, texte_utilisateur

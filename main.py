@@ -85,8 +85,11 @@ async def on_message(message: discord.Message):
                 )
             else:
                 await dm_channel.send(
-                    f"Salut {message.author.display_name} ! 👋 Je suis ChatAEC. "
-                    "Quelle mesure ou quel thème du programme *L'Avenir en commun* t'intéresse ?"
+                    f"Salut {message.author.display_name} ! 👋 Je suis ChatAEC, ton assistant pour explorer le programme **L'Avenir en commun**. \n,"
+            "Je ne suis pas un outil officiel de la France insoumise, mais codé par un militant.\n"
+            "Tu peux m'envoyer du texte ou des vocaux.\n",
+            "Pose-moi une question sur une mesure, un thème ou une proposition pour commencer !",
+        
                 )
 
             await message.reply(
@@ -300,7 +303,7 @@ async def process_whatsapp_message(msg: dict):
                 return
 
             # Appel IA ChatAEC (À connecter)
-            bot_reply, reply_as_audio, total_p_tokens, total_c_tokens = await generate_aec_response(
+            bot_reply, reply_as_audio, total_p_tokens, total_c_tokens, = await generate_aec_response(
                 utilisateur=utilisateur,
                 user_input=media_bytes if media_bytes else user_content,
                 session_db=session,
@@ -433,7 +436,7 @@ async def telegram_webhook(
     if not chat_id or not user_id:
         return {"status": "ignored"}
 
-    BOT_USERNAME = "@ChatAEC_bot"  # Remplace par le @ exact de ton bot Telegram
+    BOT_USERNAME = "@ChatAEC2027_bot"  # Remplace par le @ exact de ton bot Telegram
 
     if is_group:
         if BOT_USERNAME.lower() not in message_texte.lower():
@@ -475,7 +478,8 @@ async def telegram_webhook(
         await send_telegram_text(
             chat_id,
             f"Bonjour {prenom_telegram} ! 👋 Je suis ChatAEC, ton assistant pour explorer le programme *L'Avenir en commun*.\n"
-            "Pose-moi une question sur une mesure, un thème ou une proposition pour commencer !",
+            "Pose-moi une question, en texte ou vocal, sur une mesure, un thème ou une proposition pour commencer !\n"
+            "_Outil militant non officiel_"
         )
         return {"status": "ok"}
 
@@ -522,7 +526,8 @@ async def telegram_webhook(
         return {"status": "ignored"}
 
     # Appel IA ChatAEC (À connecter)
-    bot_reply, reply_as_audio, total_p_tokens, total_c_tokens = await generate_aec_response(
+    # Appel IA ChatAEC
+    bot_reply, reply_as_audio, total_p_tokens, total_c_tokens, texte_transcrit = await generate_aec_response(
         utilisateur=utilisateur,
         user_input=media_bytes if media_bytes else user_content,
         session_db=session_db,
@@ -530,12 +535,14 @@ async def telegram_webhook(
         is_group=is_group,
     )
 
-    # Historique DB
+    # Historique DB (on enregistre le texte transcrit si c'était un vocal)
+    contenu_a_sauvegarder = texte_transcrit if media_type == "audio" and texte_transcrit else user_content
+
     session_db.add(
         MessageLog(
             id_utilisateur=utilisateur.id_utilisateur,
             role="user",
-            contenu=user_content,
+            contenu=contenu_a_sauvegarder,
             tokens_entree=total_p_tokens,
             tokens_sortie=total_c_tokens,
             type_media=media_type,
@@ -546,15 +553,11 @@ async def telegram_webhook(
             id_utilisateur=utilisateur.id_utilisateur,
             role="assistant",
             contenu=bot_reply,
-            type_media="audio" if reply_as_audio else "texte",
+            type_media="texte",
         )
     )
     await session_db.commit()
-
-    if reply_as_audio:
-        await send_telegram_audio(chat_id, bot_reply, show_mp_button=is_group)
-    else:
-        await send_telegram_text(chat_id, bot_reply, show_mp_button=is_group)
+    await send_telegram_text(chat_id, bot_reply, show_mp_button=is_group)
 
     return {"status": "ok"}
 
