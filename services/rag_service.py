@@ -52,9 +52,15 @@ async def rechercher_passages_programme(
     # 3. Formatage des extraits avec traçabilité
     blocs = []
     for item in resultats:
-        blocs.append(
-            f"--- Extrait ({item['chapitre']} | Source : {item['source_url']}) ---\n"
-            f"{item['contenu']}"
-        )
+        titre_court = item.get("titre_court") or item.get("titre_source") or "Programme"
+        partie = item.get("partie")
+        chapitre = item.get("chapitre") or ""
+
+        if partie:
+            en_tete = f"--- Extrait [SOURCE : {titre_court} | {partie} | {chapitre}] ---"
+        else:
+            en_tete = f"--- Extrait [SOURCE : {titre_court} | {chapitre}] ---"
+
+        blocs.append(f"{en_tete}\n{item['contenu']}")
 
     return "\n\n".join(blocs)
