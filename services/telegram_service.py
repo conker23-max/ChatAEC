@@ -6,7 +6,7 @@ import httpx
 # --- CHARGEMENT DU TOKEN & USERNAME ---
 RAW_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN") or ""
 BOT_TOKEN = RAW_TOKEN.strip().strip('"').strip("'")
-BOT_USERNAME = os.getenv("TELEGRAM_BOT_USERNAME", "ChatAEC_bot").lstrip("@")
+BOT_USERNAME = os.getenv("TELEGRAM_BOT_USERNAME", "ChatAEC2027_bot").lstrip("@")
 
 if BOT_TOKEN.startswith("bot"):
     BASE_URL = f"https://api.telegram.org/{BOT_TOKEN}"
