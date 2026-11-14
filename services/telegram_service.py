@@ -36,11 +36,14 @@ async def send_telegram_text(
     text: str,
     show_mp_button: bool = False,
 ) -> dict:
-    """Envoie un message en texte brut sur Telegram."""
+    """Envoie un message formaté en HTML sur Telegram."""
     url = f"{BASE_URL}/sendMessage"
+    texte_formate = formater_pour_telegram(text)
+
     payload = {
         "chat_id": chat_id,
-        "text": formater_pour_telegram(text),
+        "text": texte_formate[:4096],
+        "parse_mode": "HTML",
     }
     if show_mp_button:
         payload["reply_markup"] = {
@@ -57,7 +60,6 @@ async def send_telegram_text(
         resp = await client.post(url, json=payload)
         resp.raise_for_status()
         return resp.json()
-
 
 async def download_telegram_file(file_id: str) -> bytes:
     """Récupère le binaire d'une photo ou d'un message vocal Telegram."""
