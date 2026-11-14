@@ -477,7 +477,7 @@ async def telegram_webhook(
     if message_texte.startswith("/start"):
         await send_telegram_text(
             chat_id,
-            f"Bonjour {prenom_telegram} ! 👋 Je suis ChatAEC, ton assistant pour explorer le programme *L'Avenir en commun*.\n"
+            f"Bonjour {prenom_telegram} ! 👋 Je suis ChatAEC, ton assistant pour explorer le programme *L'Avenir en commun* ainsi que les plans thématiques de la France insoumise.\n"
             "Pose-moi une question, en texte ou vocal, sur une mesure, un thème ou une proposition pour commencer !\n"
             "_Outil militant non officiel_"
         )
