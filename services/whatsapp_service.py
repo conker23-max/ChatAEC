@@ -22,8 +22,8 @@ def send_text_message(recipient_phone: str, text: str) -> dict:
         "text": {"body": text},
     }
     response = requests.post(url, headers=HEADERS, json=payload)
-    response.raise_for_status()
     print(f"🔍 DEBUG META - Code: {response.status_code} | Réponse: {response.text}")
+    response.raise_for_status()
     return response.json()
 
 
