@@ -303,7 +303,7 @@ async def process_whatsapp_message(msg: dict):
                 return
 
             # Appel IA ChatAEC (À connecter)
-            bot_reply, reply_as_audio, total_p_tokens, total_c_tokens, = await generate_aec_response(
+            bot_reply, _, total_p_tokens, total_c_tokens, texte_transcrit = await generate_aec_response(
                 utilisateur=utilisateur,
                 user_input=media_bytes if media_bytes else user_content,
                 session_db=session,
@@ -326,20 +326,16 @@ async def process_whatsapp_message(msg: dict):
                     id_utilisateur=utilisateur.id_utilisateur,
                     role="assistant",
                     contenu=bot_reply,
-                    type_media="audio" if reply_as_audio else "texte",
+                    type_media="texte",
                     media_url=None,
                 )
             )
             await session.commit()
 
-        if reply_as_audio:
-            fn = send_audio_message(sender_phone, bot_reply)
-            if inspect.iscoroutinefunction(send_audio_message):
-                await fn
-        else:
-            fn = send_text_message(sender_phone, bot_reply)
-            if inspect.iscoroutinefunction(send_text_message):
-                await fn
+
+        fn = send_text_message(sender_phone, bot_reply)
+        if inspect.iscoroutinefunction(send_text_message):
+            await fn
 
     except Exception as e:
         print(f"❌ Erreur process_whatsapp_message : {e}")
@@ -364,7 +360,8 @@ async def verify_webhook(
         raise HTTPException(status_code=403, detail="Invalid verification token")
 
     return {"status": "webhook endpoint active"}
-
+# Un ensemble global pour suivre les utilisateurs en cours de traitement (anti-spam simultané)
+PROCESSING_USERS = set()
 
 @app.post("/webhook")
 async def handle_whatsapp_webhook(
@@ -396,19 +393,33 @@ async def handle_whatsapp_webhook(
         msg_id = msg.get("id")
         sender_phone = msg.get("from")
 
-        if msg_id in PROCESSED_MESSAGES or sender_phone in ACTIVE_USERS:
+        # Anti-doublon strict sur le message ID
+        if msg_id in PROCESSED_MESSAGES:
+            return Response(status_code=status.HTTP_200_OK)
+        PROCESSED_MESSAGES[msg_id] = True
+
+        # Anti-spam : si l'utilisateur envoie un message pendant que son précédent est en cours de traitement
+        if sender_phone in PROCESSING_USERS:
             return Response(status_code=status.HTTP_200_OK)
 
-        PROCESSED_MESSAGES[msg_id] = True
-        ACTIVE_USERS.add(sender_phone)
+        PROCESSING_USERS.add(sender_phone)
 
-        background_tasks.add_task(process_whatsapp_message, msg)
+        # On lance la tâche de fond en lui passant une fonction pour nettoyer le verrou à la fin
+        background_tasks.add_task(run_process_and_unlock, msg, sender_phone)
+        
         return Response(status_code=status.HTTP_200_OK)
 
     except Exception as e:
         print(f"❌ Erreur webhook : {e}")
         return Response(status_code=status.HTTP_200_OK)
 
+
+async def run_process_and_unlock(msg, sender_phone):
+    """Exécute le traitement et s'assure de libérer l'utilisateur du verrou anti-spam quoiqu'il arrive."""
+    try:
+        await process_whatsapp_message(msg)
+    finally:
+        PROCESSING_USERS.discard(sender_phone)
 
 # ==========================================================
 # ROUTE TELEGRAM WEBHOOK (Canal actif principal)
