@@ -23,7 +23,9 @@ def send_text_message(recipient_phone: str, text: str) -> dict:
     }
     response = requests.post(url, headers=HEADERS, json=payload)
     response.raise_for_status()
+    print(f"🔍 DEBUG META - Code: {response.status_code} | Réponse: {response.text}")
     return response.json()
+
 
 
 def download_media_bytes(media_id: str) -> bytes:
