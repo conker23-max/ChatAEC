@@ -33,6 +33,7 @@ def generer_system_instruction(
 =======================================================
 EXTRAITS DU PROGRAMME « L'AVENIR EN COMMUN » (SOURCE DE RÉFÉRENCE)
 =======================================================
+Finis systématiquement par "#AEC2027"
 Base ta réponse en priorité sur ces extraits officiels :
 {extraits_programme}
 =======================================================
