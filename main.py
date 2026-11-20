@@ -23,7 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from config import WEBHOOK_VERIFY_TOKEN
 from database import AsyncSessionLocal, get_db
 from models import MessageLog, Utilisateur
-from services.mistral_service import generate_aec_response
+from services.gemini_service import generate_aec_response
 from services.telegram_service import send_telegram_text
 from services.user_service import (
     LIMITE_MESSAGES_JOUR,
