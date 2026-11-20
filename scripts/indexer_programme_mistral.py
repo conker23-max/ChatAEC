@@ -25,10 +25,10 @@ BATCH_SIZE = 32
 # ==========================================================
 # PARAMÈTRES DU DOCUMENT À INDEXER (À changer selon le plan)
 # ==========================================================
-INPUT_FILE = "plan_btp.md"
-TYPE_DOCUMENT = "plan_investissement"  # 'programme_aec' | 'plan_investissement' | 'plan_thematique'
-TITRE_SOURCE = "Plan BTP"
-DEFAULT_URL = "https://melenchon2027.fr/programme/plans-thematiques/btp/"
+INPUT_FILE = "plan_ruralite.md"
+TYPE_DOCUMENT = "plan_thematique"  # 'programme_aec' | 'plan_investissement' | 'plan_thematique'
+TITRE_SOURCE = "Plan Ruralité"
+DEFAULT_URL = "https://melenchon2027.fr/programme/plans-thematiques/ruralite/"
 
 
 def decouper_markdown_en_chunks(filepath: str, titre_source: str, default_url: str) -> list[dict]:
