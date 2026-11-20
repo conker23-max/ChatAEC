@@ -1,12 +1,10 @@
-import os
-import asyncio
 from contextlib import asynccontextmanager
 import inspect
+from pathlib import Path
 import traceback
 import uuid
+
 from cachetools import TTLCache
-import discord
-from discord.ext import commands
 from fastapi import (
     BackgroundTasks,
     Depends,
@@ -17,220 +15,40 @@ from fastapi import (
     Response,
     status,
 )
-from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse
-from fastapi.templating import Jinja2Templates
+import markdown
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import WEBHOOK_VERIFY_TOKEN
 from database import AsyncSessionLocal, get_db
 from models import MessageLog, Utilisateur
-# À remplacer par ton futur service IA pour L'Avenir en commun
-from services.gemini_service import generate_aec_response
-from services.storage_service import upload_bytes_to_storage
-from services.telegram_service import (
-    download_telegram_file,
-    send_telegram_text,
-)
+from services.mistral_service import generate_aec_response
+from services.telegram_service import send_telegram_text
 from services.user_service import (
     LIMITE_MESSAGES_JOUR,
     get_or_create_user,
     verifier_quota_journalier,
 )
 from services.whatsapp_service import (
-    download_media_bytes,
     mark_message_as_read,
-    # send_audio_message,
     send_text_message,
 )
 
-# ==========================================================
-# CONFIGURATION BOT DISCORD (Prêt pour étape suivante)
-# ==========================================================
-intents = discord.Intents.default()
-intents.message_content = True
-discord_bot = commands.Bot(command_prefix="!", intents=intents)
+BOT_USERNAME = "@ChatAEC2027_bot"
+PRIVACY_MD_PATH = Path("./pages/confidentialite.md")
 
-@discord_bot.event
-async def on_ready():
-    print(f"🤖 Bot Discord connecté en tant que : {discord_bot.user}", flush=True)
+PROCESSED_MESSAGES = TTLCache(maxsize=2000, ttl=300)
+PROCESSING_USERS = set()
 
 
-@discord_bot.event
-async def on_message(message: discord.Message):
-    if message.author.bot:
-        return
-
-    is_dm = isinstance(message.channel, discord.DMChannel)
-    is_mentioned = (
-        discord_bot.user in message.mentions if discord_bot.user else False
-    )
-
-    if not is_dm and not is_mentioned:
-        return
-
-    if not is_dm and is_mentioned:
-        try:
-            dm_channel = message.author.dm_channel or await message.author.create_dm()
-            question = message.clean_content
-            if discord_bot.user:
-                question = question.replace(f"@{discord_bot.user.name}", "").strip()
-
-            if question:
-                await dm_channel.send(
-                    f"Salut {message.author.display_name} ! 👋 Tu m'as demandé dans le salon :\n"
-                    f"> *« {question} »*\n\n"
-                    "On en discute tranquillement ici, dis-moi tout !"
-                )
-            else:
-                await dm_channel.send(
-                    f"Salut {message.author.display_name} ! 👋 Je suis ChatAEC, ton assistant pour explorer le programme **L'Avenir en commun**. \n,"
-            "Je ne suis pas un outil officiel de la France insoumise, mais codé par un militant.\n"
-            "Tu peux m'envoyer du texte ou des vocaux.\n",
-            "Pose-moi une question sur une mesure, un thème ou une proposition pour commencer !",
-        
-                )
-
-            await message.reply(
-                f"Salut {message.author.mention} ! Je viens de t'envoyer un message privé pour qu'on échange ensemble. 🚀"
-            )
-        except discord.Forbidden:
-            await message.reply(
-                f"Aïe {message.author.mention}, je ne peux pas t'envoyer de message privé ! "
-                "Pense à autoriser les MP pour ce serveur dans tes paramètres de confidentialité. 😉"
-            )
-        return
-
-    discord_id = f"dc_{message.author.id}"
-    prenom_discord = message.author.display_name or "Citoyen"
-
-    async with AsyncSessionLocal() as session_db:
-        stmt = select(Utilisateur).where(Utilisateur.whatsapp_id == discord_id)
-        result = await session_db.execute(stmt)
-        utilisateur = result.scalar_one_or_none()
-
-        if not utilisateur:
-            utilisateur = Utilisateur(
-                whatsapp_id=discord_id,
-                prenom_eleve=prenom_discord,
-                pays="France",
-                dashboard_token=uuid.uuid4().hex,
-                etape_onboarding="TERMINE",
-            )
-            session_db.add(utilisateur)
-            await session_db.commit()
-            await session_db.refresh(utilisateur)
-
-        async with message.channel.typing():
-            autorise, _ = await verifier_quota_journalier(utilisateur.id_utilisateur, session_db)
-            if not autorise:
-                limite_msg = (
-                    f"Merci pour ces échanges aujourd'hui {utilisateur.prenom_eleve or ''} ! ✊\n\n"
-                    f"Tu as atteint la limite quotidienne ({LIMITE_MESSAGES_JOUR} messages).\n"
-                    "On reprend la discussion demain !"
-                )
-                await message.reply(limite_msg)
-                return
-
-            user_content = message.content or ""
-            if discord_bot.user:
-                user_content = user_content.replace(f"@{discord_bot.user.name}", "").strip()
-
-            media_type = "texte"
-            media_bytes = None
-
-            if message.attachments:
-                attachment = message.attachments[0]
-                content_type = attachment.content_type or ""
-
-                if "image" in content_type:
-                    media_type = "image"
-                    media_bytes = await attachment.read()
-                    user_content = user_content or "[Image envoyée par l'utilisateur]"
-                elif "audio" in content_type or "ogg" in content_type:
-                    media_type = "audio"
-                    media_bytes = await attachment.read()
-                    user_content = "[Message vocal envoyé par l'utilisateur]"
-
-            # Appel IA ChatAEC (À connecter)
-            bot_reply, reply_as_audio, total_p_tokens, total_c_tokens = await generate_aec_response(
-                utilisateur=utilisateur,
-                user_input=media_bytes if media_bytes else user_content,
-                session_db=session_db,
-                media_type=media_type,
-            )
-            bot_reply = "Réponse test de ChatAEC."
-            reply_as_audio = False
-            total_p_tokens = 0
-            total_c_tokens = 0
-
-            session_db.add(
-                MessageLog(
-                    id_utilisateur=utilisateur.id_utilisateur,
-                    role="user",
-                    contenu=user_content,
-                    tokens_entree=total_p_tokens,
-                    tokens_sortie=total_c_tokens,
-                    type_media=media_type,
-                )
-            )
-            session_db.add(
-                MessageLog(
-                    id_utilisateur=utilisateur.id_utilisateur,
-                    role="assistant",
-                    contenu=bot_reply,
-                    type_media="audio" if reply_as_audio else "texte",
-                )
-            )
-            await session_db.commit()
-
-            if reply_as_audio:
-                tmp_audio_path = None
-                try:
-                    tmp_audio_path = await generer_audio_discord(bot_reply)
-                    audio_file = discord.File(tmp_audio_path, filename="vocal_chataec.ogg")
-                    await message.reply(content=bot_reply, file=audio_file)
-                except Exception as err_audio:
-                    print(f"⚠️ Erreur génération vocal Discord : {err_audio}", flush=True)
-                    await message.reply(bot_reply)
-                finally:
-                    if tmp_audio_path and os.path.exists(tmp_audio_path):
-                        os.remove(tmp_audio_path)
-            else:
-                if len(bot_reply) > 1950:
-                    for chunk in [bot_reply[i : i + 1950] for i in range(0, len(bot_reply), 1950)]:
-                        await message.reply(chunk)
-                else:
-                    await message.reply(bot_reply)
-
-
-# ==========================================================
-# GESTION DU CYCLE DE VIE (LIFESPAN)
-# ==========================================================
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    token = os.getenv("DISCORD_BOT_TOKEN")
-    discord_task = None
-
-    if token:
-        discord_task = asyncio.create_task(discord_bot.start(token))
-        print("🚀 Démarrage du client Discord...", flush=True)
-    else:
-        print("ℹ️ DISCORD_BOT_TOKEN non configuré (canal en veille).", flush=True)
-
+    print("🚀 Démarrage de ChatAEC (mode texte)...", flush=True)
     yield
-
-    if token and not discord_bot.is_closed():
-        await discord_bot.close()
-        if discord_task:
-            await discord_task
-        print("🛑 Arrêt propre du client Discord.", flush=True)
+    print("🛑 Arrêt de ChatAEC...", flush=True)
 
 
-# ==========================================================
-# INITIALISATION FASTAPI
-# ==========================================================
 app = FastAPI(
     title="ChatAEC - Assistant L'Avenir en commun",
     docs_url=None,
@@ -239,22 +57,59 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-PROCESSED_MESSAGES = TTLCache(maxsize=2000, ttl=300)
-ACTIVE_USERS = set()
-
 
 @app.get("/health")
 def health_check():
     return {"status": "ok"}
 
 
-@app.get("/confidentialite")
+@app.get("/confidentialite", response_class=HTMLResponse)
 def privacy_policy():
-    return {"message": "Politique de confidentialité de ChatAEC..."}
+    if not PRIVACY_MD_PATH.exists():
+        raise HTTPException(
+            status_code=404, detail="Page de confidentialité introuvable."
+        )
+
+    md_content = PRIVACY_MD_PATH.read_text(encoding="utf-8")
+    html_body = markdown.markdown(
+        md_content,
+        extensions=["extra", "sane_lists", "nl2br"],
+    )
+
+    return f"""<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Politique de confidentialité et RGPD — ChatAEC</title>
+  <style>
+    body {{
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      max-width: 780px;
+      margin: 40px auto;
+      padding: 0 20px;
+      line-height: 1.65;
+      color: #1f2937;
+    }}
+    h1, h2, h3 {{
+      color: #111827;
+      margin-top: 1.6em;
+    }}
+    code {{
+      background: #f3f4f6;
+      padding: 2px 5px;
+      border-radius: 4px;
+    }}
+  </style>
+</head>
+<body>
+  {html_body}
+</body>
+</html>"""
 
 
 # ==========================================================
-# TRAITEMENT DES MESSAGES WHATSAPP (Prêt pour étape suivante)
+# TRAITEMENT DES MESSAGES WHATSAPP (TEXTE UNIQUEMENT)
 # ==========================================================
 async def process_whatsapp_message(msg: dict):
     sender_phone = msg.get("from")
@@ -264,50 +119,37 @@ async def process_whatsapp_message(msg: dict):
         mark_message_as_read(msg_id)
 
     try:
-        msg_type = msg.get("type")
+        if msg.get("type") != "text":
+            if sender_phone:
+                fn = send_text_message(
+                    sender_phone,
+                    "Pour le moment, ChatAEC ne traite que les messages texte. Écris-moi ta question !",
+                )
+                if inspect.iscoroutinefunction(send_text_message):
+                    await fn
+            return
+
+        user_content = msg.get("text", {}).get("body", "").strip()
+        if not user_content:
+            return
 
         async with AsyncSessionLocal() as session:
             utilisateur = await get_or_create_user(sender_phone, session)
-            print(f"👤 Message WhatsApp de {utilisateur.prenom_eleve or 'Nouveau'} ({sender_phone})")
+            print(
+                f"👤 Message WhatsApp de {utilisateur.prenom_eleve or 'Nouveau'} ({sender_phone})"
+            )
 
-            user_content = ""
-            media_type = "texte"
-            media_url = None
-            media_bytes = None
-
-            if msg_type == "text":
-                user_content = msg["text"]["body"]
-                media_type = "texte"
-
-            elif msg_type in ["audio", "voice"]:
-                media_type = "audio"
-                media_id = msg[msg_type]["id"]
-                media_bytes = download_media_bytes(media_id)
-                try:
-                    media_url = upload_bytes_to_storage(media_bytes, "ogg", "audio/ogg")
-                except Exception as err:
-                    print(f"⚠️ Erreur Storage audio : {err}")
-                user_content = "[Message vocal envoyé par l'utilisateur]"
-
-            elif msg_type == "image":
-                media_type = "image"
-                media_id = msg["image"]["id"]
-                media_bytes = download_media_bytes(media_id)
-                try:
-                    media_url = upload_bytes_to_storage(media_bytes, "jpg", "image/jpeg")
-                except Exception as err:
-                    print(f"⚠️ Erreur Storage image : {err}")
-                user_content = "[Image envoyée par l'utilisateur]"
-
-            else:
-                return
-
-            # Appel IA ChatAEC (À connecter)
-            bot_reply, _, total_p_tokens, total_c_tokens, texte_transcrit = await generate_aec_response(
+            (
+                bot_reply,
+                _,
+                total_p_tokens,
+                total_c_tokens,
+                _,
+            ) = await generate_aec_response(
                 utilisateur=utilisateur,
-                user_input=media_bytes if media_bytes else user_content,
+                user_input=user_content,
                 session_db=session,
-                media_type=media_type,
+                media_type="texte",
             )
 
             session.add(
@@ -317,8 +159,7 @@ async def process_whatsapp_message(msg: dict):
                     contenu=user_content,
                     tokens_entree=total_p_tokens,
                     tokens_sortie=total_c_tokens,
-                    type_media=media_type,
-                    media_url=media_url,
+                    type_media="texte",
                 )
             )
             session.add(
@@ -327,21 +168,27 @@ async def process_whatsapp_message(msg: dict):
                     role="assistant",
                     contenu=bot_reply,
                     type_media="texte",
-                    media_url=None,
                 )
             )
             await session.commit()
 
-
-        fn = send_text_message(sender_phone, bot_reply)
-        if inspect.iscoroutinefunction(send_text_message):
-            await fn
+        if bot_reply and sender_phone:
+            fn = send_text_message(sender_phone, bot_reply)
+            if inspect.iscoroutinefunction(send_text_message):
+                await fn
 
     except Exception as e:
         print(f"❌ Erreur process_whatsapp_message : {e}")
         traceback.print_exc()
+
+
+async def run_process_and_unlock(msg: dict, sender_phone: str | None):
+    """Exécute le traitement et libère le verrou anti-spam quoi qu'il arrive."""
+    try:
+        await process_whatsapp_message(msg)
     finally:
-        ACTIVE_USERS.discard(sender_phone)
+        if sender_phone:
+            PROCESSING_USERS.discard(sender_phone)
 
 
 # ==========================================================
@@ -356,12 +203,11 @@ async def verify_webhook(
 ):
     if hub_mode == "subscribe":
         if hub_token == WEBHOOK_VERIFY_TOKEN:
-            return Response(content=hub_challenge, media_type="text/plain")
+            return Response(content=hub_challenge or "", media_type="text/plain")
         raise HTTPException(status_code=403, detail="Invalid verification token")
 
     return {"status": "webhook endpoint active"}
-# Un ensemble global pour suivre les utilisateurs en cours de traitement (anti-spam simultané)
-PROCESSING_USERS = set()
+
 
 @app.post("/webhook")
 async def handle_whatsapp_webhook(
@@ -393,20 +239,18 @@ async def handle_whatsapp_webhook(
         msg_id = msg.get("id")
         sender_phone = msg.get("from")
 
-        # Anti-doublon strict sur le message ID
-        if msg_id in PROCESSED_MESSAGES:
+        if msg_id and msg_id in PROCESSED_MESSAGES:
             return Response(status_code=status.HTTP_200_OK)
-        PROCESSED_MESSAGES[msg_id] = True
+        if msg_id:
+            PROCESSED_MESSAGES[msg_id] = True
 
-        # Anti-spam : si l'utilisateur envoie un message pendant que son précédent est en cours de traitement
-        if sender_phone in PROCESSING_USERS:
+        if sender_phone and sender_phone in PROCESSING_USERS:
             return Response(status_code=status.HTTP_200_OK)
 
-        PROCESSING_USERS.add(sender_phone)
+        if sender_phone:
+            PROCESSING_USERS.add(sender_phone)
 
-        # On lance la tâche de fond en lui passant une fonction pour nettoyer le verrou à la fin
         background_tasks.add_task(run_process_and_unlock, msg, sender_phone)
-        
         return Response(status_code=status.HTTP_200_OK)
 
     except Exception as e:
@@ -414,15 +258,8 @@ async def handle_whatsapp_webhook(
         return Response(status_code=status.HTTP_200_OK)
 
 
-async def run_process_and_unlock(msg, sender_phone):
-    """Exécute le traitement et s'assure de libérer l'utilisateur du verrou anti-spam quoiqu'il arrive."""
-    try:
-        await process_whatsapp_message(msg)
-    finally:
-        PROCESSING_USERS.discard(sender_phone)
-
 # ==========================================================
-# ROUTE TELEGRAM WEBHOOK (Canal actif principal)
+# ROUTE TELEGRAM WEBHOOK (TEXTE UNIQUEMENT)
 # ==========================================================
 @app.post("/webhook/telegram")
 async def telegram_webhook(
@@ -434,8 +271,8 @@ async def telegram_webhook(
     if not message:
         return {"status": "ignored"}
 
-    message_texte = message.get("text") or message.get("caption") or ""
-    chat_id = message["chat"]["id"]
+    message_texte = (message.get("text") or "").strip()
+    chat_id = message.get("chat", {}).get("id")
 
     chat_type = message.get("chat", {}).get("type", "private")
     is_group = chat_type in ["group", "supergroup"]
@@ -447,8 +284,6 @@ async def telegram_webhook(
     if not chat_id or not user_id:
         return {"status": "ignored"}
 
-    BOT_USERNAME = "@ChatAEC2027_bot"  # Remplace par le @ exact de ton bot Telegram
-
     if is_group:
         if BOT_USERNAME.lower() not in message_texte.lower():
             return {"status": "ignored"}
@@ -459,7 +294,7 @@ async def telegram_webhook(
             .strip()
         )
 
-        if not message_texte and not (message.get("photo") or message.get("voice")):
+        if not message_texte:
             await send_telegram_text(
                 chat_id,
                 f"Salut {prenom_telegram} ! Pose-moi ta question sur le programme avec mon tag, ou viens discuter en MP 👇",
@@ -467,7 +302,17 @@ async def telegram_webhook(
             )
             return {"status": "ok"}
 
-    # Récupération ou création du profil utilisateur
+    if "text" not in message:
+        await send_telegram_text(
+            chat_id,
+            "Pour le moment, ChatAEC ne répond qu'aux messages texte. Écris-moi ta question !",
+            show_mp_button=is_group,
+        )
+        return {"status": "ok"}
+
+    if not message_texte:
+        return {"status": "ignored"}
+
     stmt = select(Utilisateur).where(Utilisateur.whatsapp_id == f"tg_{user_id}")
     result = await session_db.execute(stmt)
     utilisateur = result.scalar_one_or_none()
@@ -484,17 +329,17 @@ async def telegram_webhook(
         await session_db.commit()
         await session_db.refresh(utilisateur)
 
-    # Commande /start
     if message_texte.startswith("/start"):
         await send_telegram_text(
             chat_id,
             f"Bonjour {prenom_telegram} ! 👋 Je suis ChatAEC, ton assistant pour explorer le programme *L'Avenir en commun* ainsi que les plans thématiques de la France insoumise.\n"
-            "Pose-moi une question, en texte ou vocal, sur une mesure, un thème ou une proposition pour commencer !\n"
-            "_Outil militant non officiel_"
+            "Pose-moi une question en texte sur une mesure, un thème ou une proposition pour commencer !\n"
+            "🔒 Politique de confidentialité : https://chataec.onrender.com/confidentialite\n\n"
+            "_Outil militant non officiel_",
+
         )
         return {"status": "ok"}
 
-    # Vérification du quota journalier
     autorise, _ = await verifier_quota_journalier(
         utilisateur.id_utilisateur, session_db
     )
@@ -507,56 +352,28 @@ async def telegram_webhook(
         await send_telegram_text(chat_id, message_limite, show_mp_button=is_group)
         return {"status": "quota_reached"}
 
-    user_content = ""
-    media_type = "texte"
-    media_bytes = None
-
-    if "photo" in message:
-        media_type = "image"
-        file_id = message["photo"][-1]["file_id"]
-        media_bytes = await download_telegram_file(file_id)
-        user_content = message.get("caption") or "[Image envoyée par l'utilisateur]"
-
-        if not media_bytes:
-            await send_telegram_text(
-                chat_id, "Je n'ai pas réussi à charger ta photo. Réessaie !"
-            )
-            return {"status": "ok"}
-
-    elif "voice" in message or "audio" in message:
-        media_type = "audio"
-        audio_obj = message.get("voice") or message.get("audio")
-        media_bytes = await download_telegram_file(audio_obj["file_id"])
-        user_content = "[Message vocal envoyé par l'utilisateur]"
-
-    elif "text" in message:
-        user_content = message_texte
-        media_type = "texte"
-
-    else:
-        return {"status": "ignored"}
-
-    # Appel IA ChatAEC (À connecter)
-    # Appel IA ChatAEC
-    bot_reply, reply_as_audio, total_p_tokens, total_c_tokens, texte_transcrit = await generate_aec_response(
+    (
+        bot_reply,
+        _,
+        total_p_tokens,
+        total_c_tokens,
+        _,
+    ) = await generate_aec_response(
         utilisateur=utilisateur,
-        user_input=media_bytes if media_bytes else user_content,
+        user_input=message_texte,
         session_db=session_db,
-        media_type=media_type,
+        media_type="texte",
         is_group=is_group,
     )
-
-    # Historique DB (on enregistre le texte transcrit si c'était un vocal)
-    contenu_a_sauvegarder = texte_transcrit if media_type == "audio" and texte_transcrit else user_content
 
     session_db.add(
         MessageLog(
             id_utilisateur=utilisateur.id_utilisateur,
             role="user",
-            contenu=contenu_a_sauvegarder,
+            contenu=message_texte,
             tokens_entree=total_p_tokens,
             tokens_sortie=total_c_tokens,
-            type_media=media_type,
+            type_media="texte",
         )
     )
     session_db.add(

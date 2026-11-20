@@ -4,8 +4,8 @@ from google.genai import types
 from config import GEMINI_API_KEY
 from services.storage_service import supabase
 
-client_ai = genai.Client(api_key=GEMINI_API_KEY)
-EMBEDDING_MODEL = "gemini-embedding-001"
+# client_ai = genai.Client(api_key=GEMINI_API_KEY)
+# EMBEDDING_MODEL = "gemini-embedding-001"
 
 
 def _embed_query_sync(requete: str) -> list[float]:

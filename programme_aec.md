@@ -1,18 +1,6 @@
 # Découvrir le programme
 Source : https://melenchon2027.fr/programme/decouvrir/
 
-- Gérer les options
-
-- Gérer les services
-
-- Gérer {vendor_count} fournisseurs
-
-- En savoir plus sur ces finalités
-
-- Mentions légales
-
-- {title}
-
 L'Avenir en commun est le programme de la Nouvelle France. Il a été écrit avec un objectif précis et global : faire face à l'urgence sociale et répondre à la crise de la civilisation humaine ouverte par le changement climatique et le retour de la guerre généralisée.
 
 Ce programme prépare une vie meilleure. Il compte 1 069 mesures concrètes que Jean-Luc Mélenchon et les futurs membres de son gouvernement appliqueront dès mai 2027. Il a été élaboré par un travail collectif et en impliquant le plus grand nombre par des auditions de syndicats, d'associations ou d'ONG et plus de 24 000 contributions citoyennes.

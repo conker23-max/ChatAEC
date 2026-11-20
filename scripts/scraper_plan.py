@@ -1,8 +1,8 @@
 import requests
 from bs4 import BeautifulSoup
 
-URL_PLAN = "https://melenchon2027.fr/plans-investissement/textile/"
-FICHIER_SORTIE = "plan_textile.md"
+URL_PLAN = "https://melenchon2027.fr/plans-thematiques/pauvrete//"
+FICHIER_SORTIE = "plan_pauvrete.md"
 
 def extraire_page_en_markdown(url: str, output_file: str):
     resp = requests.get(url, headers={"User-Agent": "Mozilla/5.0"})

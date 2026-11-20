@@ -20,11 +20,10 @@ EMBEDDING_MODEL = "gemini-embedding-001"
 # ==========================================================
 # PARAMÈTRES DU DOCUMENT À INDEXER (À changer selon le plan)
 # ==========================================================
-INPUT_FILE = "plan_textile.md"
-TYPE_DOCUMENT = "plan_productif"  # 'programme_aec' | 'plan_investissement' | 'plan_thematique'
-TITRE_SOURCE = "Plan d'investissement productif : Textile"
-DEFAULT_URL = "https://melenchon2027.fr/plans-investissement/textile/"
-
+INPUT_FILE = "programme_aec.md"
+TYPE_DOCUMENT = "programme_aec"  # 'programme_aec' | 'plan_investissement' | 'plan_thematique'
+TITRE_SOURCE = "Programme L'Avenir en commun"
+DEFAULT_URL = "https://melenchon2027.fr/programme/livre/"
 
 def decouper_markdown_en_chunks(filepath: str, titre_source: str, default_url: str) -> list[dict]:
     """Découpe le fichier Markdown par chapitre (#) et sous-thème (## / ###)."""

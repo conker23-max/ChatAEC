@@ -1,74 +1,64 @@
 import asyncio
-from database import AsyncSessionLocal
-from models import MessageLog
-from services.user_service import get_or_create_utilisateur
-from services.gemini_service import generate_aec_response
+import os
+from dotenv import load_dotenv
 
-# Codes couleurs ANSI pour un affichage propre dans PowerShell
-MAGENTA = "\033[95m"
-CYAN = "\033[96m"
-GRIS = "\033[90m"
-RESET = "\033[0m"
+# Charge les variables du fichier .env (GEMINI_API_KEY, SUPABASE_URL, etc.)
+load_dotenv()
 
+# Importe ta fonction principale et tes modèles depuis ton main.py
+from main import generate_aec_response
+from models import Utilisateur
 
-async def boucle_discussion():
-    print(f"{MAGENTA}=== ChatAEC - Mode Test Terminal ==={RESET}")
-    print(f"{GRIS}Tape 'quit' ou 'exit' pour arrêter la discussion.{RESET}\n")
+# Classe factice simulant l'utilisateur connecté en local
+class UtilisateurCLI(Utilisateur):
+    def __init__(self):
+        # Initialise les attributs minimaux nécessaires pour ton bot
+        self.id_utilisateur = 1
+        self.prenom_eleve = "Alexis"
 
-    async with AsyncSessionLocal() as db:
-        # Récupère ou crée ton utilisateur de test en base
-        user = await get_or_create_utilisateur(
-    platform_id="cli_test_alexis",
-    session_db=db,
-    prenom_defaut="Alexis",
-)
-
-        while True:
-            try:
-                question = input(f"{CYAN}Toi > {RESET}").strip()
-            except (KeyboardInterrupt, EOFError):
-                print("\nFin de la session.")
-                break
-
-            if not question:
-                continue
-            if question.lower() in {"quit", "exit", "q"}:
-                print("À bientôt !")
-                break
-
-            # 1. Enregistre ton message dans messages_logs (pour la mémoire conversationnelle)
-            db.add(MessageLog(
-                id_utilisateur=user.id_utilisateur,
-                role="user",
-                contenu=question,
-                type_media="texte",
-            ))
-            await db.commit()
-
-                # 2. Génère la réponse via RAG + Gemini
-            resultat = await generate_aec_response(
-                utilisateur=user,
-                user_input=question,
-                session_db=db,
-                media_type="texte",
-            )
-            reponse, tokens_in, tokens_out = resultat[0], resultat[1], resultat[2]
+async def main():
+    utilisateur = UtilisateurCLI()
+    
+    # session_db=None : pas d'écriture en base, mais le RAG s'exécute de son côté 
+    # (via son client Supabase ou ses propres requêtes de lecture)
+    session_db_fictive = None 
+    
+    print("=" * 60)
+    print("🤖 CHATAEC - MODE CLI LOCAL (RAG Actif / Lecture seule)")
+    print("Tape 'exit' ou 'quit' pour quitter.")
+    print("=" * 60)
+    
+    while True:
+        try:
+            user_input = input("\n👤 Toi : ").strip()
             
-
-            # 3. Enregistre la réponse du bot dans messages_logs
-            db.add(MessageLog(
-                id_utilisateur=user.id_utilisateur,
-                role="assistant",
-                contenu=reponse,
-                type_media="texte",
-                tokens_entree=tokens_in,
-                tokens_sortie=tokens_out,
-            ))
-            await db.commit()
-
-            print(f"\n{MAGENTA}ChatAEC >{RESET} {reponse}")
-            print(f"{GRIS}[Tokens : {tokens_in} in / {tokens_out} out]{RESET}\n")
-
+            if user_input.lower() in ["exit", "quit"]:
+                print("👋 Fin du test local. À plus !")
+                break
+                
+            if not user_input:
+                continue
+                
+            print("\n⏳ Interrogation du RAG et analyse des outils...")
+            
+            # En mettant is_group=True, tu évites l'écriture des messages dans la table d'historique,
+            # tout en permettant au RAG d'aller chercher les chunks dans Supabase en lecture !
+            reponse, est_vocal, p_tokens, c_tokens, texte_transcrit = await generate_aec_response(
+                utilisateur=utilisateur,
+                user_input=user_input,
+                session_db=session_db_fictive,
+                media_type="texte",
+                is_group=True 
+            )
+            
+            print(f"\n🤖 ChatAEC :\n{reponse}")
+            print(f"\n[📊 Tokens -> Prompt: {p_tokens} | Réponse: {c_tokens}]")
+            
+        except KeyboardInterrupt:
+            print("\n👋 Interruption. Sortie du CLI.")
+            break
+        except Exception as e:
+            print(f"\n❌ Erreur technique : {e}")
 
 if __name__ == "__main__":
-    asyncio.run(boucle_discussion())
+    asyncio.run(main())

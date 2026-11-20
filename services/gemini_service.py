@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta, timezone
 import re
+from services.tools_factory import LISTE_TOOLS_GEMINI, REGISTRE_OUTILS  # <--- Importé ici
 import warnings
 from google import genai
 from google.genai import types
@@ -38,18 +39,21 @@ Base ta réponse en priorité sur ces extraits officiels :
 """
 
     return f"""Tu es ChatAEC, l'assistant conversationnel dédié au programme « L'Avenir en commun » de la France insoumise.
-
+Tu as été créé par un militant. Tu es une version prototype et non officielle, mais tu te bases EXCLUSIVEMENT sur le programme enrichi des plans thématiques.
 CONTEXTE :
-- Date du jour : {date_du_jour}
-- Interlocuteur : {prenom}
+- Date du jour : 
+{date_du_jour}
+- Interlocuteur : 
+{prenom}
 {bloc_rag}
 RÈGLES DE CONDUITE ET DE TON :
 
 0. ACCUEIL ET CONVERSATION COURANTE :
    - Si l'interlocuteur te salue (« Bonjour », « Salut », etc.) ou demande qui tu es : réponds chaleureusement en une ou deux phrases, sans mentionner l'absence d'extraits, et propose-lui d'aborder un thème (pouvoir d'achat, retraite, écologie, ruralité, VIe République...).
 
-1. FIDÉLITÉ STRICTE ET SOBRIÉTÉ RÉDACTIONNELLE :
+1. FIDÉLITÉ STRICTE, SOBRIÉTÉ RÉDACTIONNELLE ET EXACTITUDE :
    - Base tes réponses aux questions programmatiques EXCLUSIVEMENT sur les extraits fournis. N'invente jamais de chiffre, de date ou de mesure.
+   - Restitue les propositions avec exactitude : reprends les termes précis, les mécanismes juridiques ou les chiffres clés tels qu'ils sont rédigés dans les extraits (utilise des citations courtes entre guillemets si nécessaire pour les mesures phares).
    - Ne paraphrase pas exagérément et évite les envolées lyriques ou le militantisme théâtral : adopte une posture objective, factuelle et directe.
    - Si les extraits permettent de répondre, donne directement les mesures sous forme de puces claires. Ne commence JAMAIS ta réponse par « Je n'ai pas trouvé cette précision... » si tu disposes d'éléments pertinents dans le corpus.
    - Réserve la phrase « Je n'ai pas trouvé cette précision dans les extraits du programme et des plans à ma disposition. » UNIQUEMENT aux cas de vide total d'information.
@@ -76,12 +80,9 @@ async def reformuler_requete_rag(
     question_actuelle: str,
     historique: list[types.Content],
 ) -> str:
-    """Si la question est une relance courte ('et le coût ?', 'pourquoi ?'),
-    la rend autonome grâce à l'historique pour que le RAG trouve les bons passages."""
     if not historique:
         return question_actuelle
 
-    # On prend les 4 derniers messages pour le contexte immédiat
     contexte_recent = historique[-4:]
     prompt_reformulation = (
         "Réécris la dernière question de l'utilisateur pour qu'elle soit autonome et claire "
@@ -108,7 +109,6 @@ async def charger_historique_recent(
     limite: int = 12,
     timeout_heures: int = 12,
 ) -> list[types.Content]:
-    """Charge les N derniers messages de l'utilisateur depuis Supabase."""
     query = (
         select(MessageLog)
         .where(MessageLog.id_utilisateur == id_utilisateur)
@@ -162,7 +162,7 @@ async def generate_aec_response(
     session_db: AsyncSession,
     media_type: str = "texte",
     is_group: bool = False,
-) -> tuple[str, bool, int, int, str]:  # <-- on ajoute le texte transcrit en 5e valeur de retour
+) -> tuple[str, bool, int, int, str]:
     """Génère une réponse écrite appuyée sur le RAG du programme."""
 
     # 1. Si c'est un vocal, on le transcrit d'abord en texte
@@ -188,7 +188,7 @@ async def generate_aec_response(
 
     texte_utilisateur = str(user_input)
 
-    # 2. Chargement de l'historique EN PREMIER (pour éclairer aussi le RAG)
+    # 2. Chargement de l'historique EN PREMIER
     if is_group:
         contents_to_send = []
     else:
@@ -212,10 +212,11 @@ async def generate_aec_response(
     part = types.Part.from_text(text=texte_utilisateur)
     contents_to_send.append(types.Content(role="user", parts=[part]))
 
-    # 6. Appel à Gemini
+    # 6. Appel à Gemini AVEC les outils intégrés dans la config
     config = types.GenerateContentConfig(
         system_instruction=system_instruction,
         temperature=0.3,
+        tools=LISTE_TOOLS_GEMINI,  # <--- On passe la liste d'outils ici
     )
 
     response = client.models.generate_content(
@@ -224,12 +225,34 @@ async def generate_aec_response(
         config=config,
     )
 
-    # 7. Comptabilisation des tokens
+    # 7. Vérification si Gemini souhaite appeler un outil (Function Calling)
+    if response.function_calls:
+        # On prend le premier appel de fonction demandé par Gemini
+        fc = response.function_calls[0]
+        nom_outil = fc.name
+        args = fc.args
+
+        if nom_outil in REGISTRE_OUTILS:
+            # Exécution de la fonction Python située dans tools_factory.py
+            resultat_outil = REGISTRE_OUTILS[nom_outil](**args)
+            
+            # Le résultat de la fonction (ex: chemin de l'image générée) devient la réponse du bot
+            # (Tu pourras adapter si tu veux que le bot commente textuellement le résultat)
+            clean_text = f"Infographie générée avec succès !\n\n{resultat_outil}"
+            
+            # Métriques de tokens approximatives pour cet appel
+            usage = getattr(response, "usage_metadata", None)
+            p_tokens = (getattr(usage, "prompt_token_count", 0) or 0) if usage else 0
+            c_tokens = (getattr(usage, "candidates_token_count", 0) or 0) if usage else 0
+
+            return clean_text, False, p_tokens, c_tokens, texte_utilisateur
+
+    # 8. Comptabilisation des tokens (flux textuel normal)
     usage = getattr(response, "usage_metadata", None)
     total_p_tokens = (getattr(usage, "prompt_token_count", 0) or 0) if usage else 0
     total_c_tokens = (getattr(usage, "candidates_token_count", 0) or 0) if usage else 0
 
-    # 8. Extraction et nettoyage de la réponse
+    # 9. Extraction et nettoyage de la réponse textuelle
     clean_text = ""
     if response.candidates and response.candidates[0].content.parts:
         text_parts = [
