@@ -20,11 +20,11 @@ import markdown
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from config import WEBHOOK_VERIFY_TOKEN
+from config import WEBHOOK_VERIFY_TOKEN, ADMIN_TELEGRAM_ID
 from database import AsyncSessionLocal, get_db
 from models import MessageLog, Utilisateur
-from services.gemini_service import generate_aec_response
-# from services.mistral_service import generate_aec_response
+from services.gemini_service import generate_aec_response as generate_gemini
+from services.mistral_service import generate_aec_response as generate_mistral
 from services.telegram_service import send_telegram_text
 from services.user_service import (
     LIMITE_MESSAGES_JOUR,
@@ -41,6 +41,9 @@ PRIVACY_MD_PATH = Path("./pages/confidentialite.md")
 
 PROCESSED_MESSAGES = TTLCache(maxsize=2000, ttl=300)
 PROCESSING_USERS = set()
+
+MOTEUR_PAR_DEFAUT = "gemini"
+MOTEURS_PERSO: dict[int, str] = {}
 
 
 @asynccontextmanager
@@ -146,7 +149,7 @@ async def process_whatsapp_message(msg: dict):
                 total_p_tokens,
                 total_c_tokens,
                 _,
-            ) = await generate_aec_response(
+            ) = await generate_gemini(
                 utilisateur=utilisateur,
                 user_input=user_content,
                 session_db=session,
@@ -340,6 +343,22 @@ async def telegram_webhook(
 
         )
         return {"status": "ok"}
+    
+    if message_texte.startswith(("/mistral", "/gemini", "/moteur")):
+        if user_id != ADMIN_TELEGRAM_ID:
+            await send_telegram_text(chat_id, "⛔ Commande réservée à l'administrateur.")
+            return {"status": "ok"}
+
+        if message_texte.startswith("/mistral"):
+            MOTEURS_PERSO[user_id] = "mistral"
+            await send_telegram_text(user_id, "🇪🇺 Ton session est passée sur **Mistral** (les autres restent sur gemini).")
+        elif message_texte.startswith("/gemini"):
+            MOTEURS_PERSO[user_id] = "gemini"
+            await send_telegram_text(user_id, "✨ Ta session est passée sur **Gemini** (les autres restent sur gemini).")
+        else:
+            actuel = MOTEURS_PERSO.get(user_id, MOTEUR_PAR_DEFAUT)
+            await send_telegram_text(user_id, f"⚙️ Ton moteur actif : **{actuel.upper()}** (défaut public : {MOTEUR_PAR_DEFAUT.upper()})")
+        return {"status": "ok"}
 
     autorise, _ = await verifier_quota_journalier(
         utilisateur.id_utilisateur, session_db
@@ -353,19 +372,34 @@ async def telegram_webhook(
         await send_telegram_text(chat_id, message_limite, show_mp_button=is_group)
         return {"status": "quota_reached"}
 
-    (
-        bot_reply,
-        _,
-        total_p_tokens,
-        total_c_tokens,
-        _,
-    ) = await generate_aec_response(
-        utilisateur=utilisateur,
-        user_input=message_texte,
-        session_db=session_db,
-        media_type="texte",
-        is_group=is_group,
-    )
+    moteur_a_utiliser = MOTEURS_PERSO.get(chat_id, MOTEUR_PAR_DEFAUT)
+    if moteur_a_utiliser == "mistral":
+        (
+            bot_reply,
+            _,
+            total_p_tokens,
+            total_c_tokens,
+            _,
+        ) = await generate_mistral(
+            utilisateur=utilisateur,
+            user_input=message_texte,
+            session_db=session_db,
+            media_type="texte",
+            is_group=is_group,
+        )
+    else:
+        (   bot_reply,
+            _,
+            total_p_tokens,
+            total_c_tokens,
+            _,
+        ) = await generate_gemini(
+            utilisateur=utilisateur,
+            user_input=message_texte,
+            session_db=session_db,
+            media_type="texte",
+            is_group=is_group,
+        )
 
     session_db.add(
         MessageLog(
